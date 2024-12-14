@@ -70,19 +70,19 @@ type structTags struct {
 // value consisting entirely of '-' will return a StructTags with Skip true and
 // the remaining fields will be their default values.
 func parseStructTags(sf reflect.StructField) (*structTags, error) {
-	key := strings.ToLower(sf.Name)
+	// key := strings.ToLower(sf.Name)
 	tag, ok := sf.Tag.Lookup("bson")
 	if !ok && !strings.Contains(string(sf.Tag), ":") && len(sf.Tag) > 0 {
 		tag = string(sf.Tag)
 	}
-	return parseTags(key, tag)
+	return parseTags(sf.Name, tag)
 }
 
 // jsonStructTagParser has the same behavior as DefaultStructTagParser
 // but will also fallback to parsing the json tag instead on a field where the
 // bson tag isn't available.
 func parseJSONStructTags(sf reflect.StructField) (*structTags, error) {
-	key := strings.ToLower(sf.Name)
+	// key := strings.ToLower(sf.Name)
 	tag, ok := sf.Tag.Lookup("bson")
 	if !ok {
 		tag, ok = sf.Tag.Lookup("json")
@@ -91,7 +91,7 @@ func parseJSONStructTags(sf reflect.StructField) (*structTags, error) {
 		tag = string(sf.Tag)
 	}
 
-	return parseTags(key, tag)
+	return parseTags(sf.Name, tag)
 }
 
 func parseTags(key string, tag string) (*structTags, error) {
