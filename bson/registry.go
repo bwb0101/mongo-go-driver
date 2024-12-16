@@ -16,7 +16,6 @@ import (
 // defaultRegistry is the default Registry. It contains the default codecs and the
 // primitive codecs.
 var defaultRegistry = NewRegistry()
-var DefaultRegistry = defaultRegistry
 
 // errNoEncoder is returned when there wasn't an encoder available for a type.
 type errNoEncoder struct {
@@ -280,16 +279,14 @@ func (r *Registry) lookupInterfaceEncoder(valueType reflect.Type, allowAddr bool
 		if valueType.Implements(ienc.i) {
 			return ienc.ve, true
 		}
-		if allowAddr && valueType.Kind() != reflect.Ptr {
-			if ptr := reflect.PointerTo(valueType); ptr.Implements(ienc.i) {
-				// if *t implements an interface, this will catch if t implements an interface further
-				// ahead in interfaceEncoders
-				defaultEnc, found := r.lookupInterfaceEncoder(ptr, false)
-				if !found {
-					defaultEnc, _ = r.kindEncoders.Load(valueType.Kind())
-				}
-				return newCondAddrEncoder(ienc.ve, defaultEnc), true
+		if allowAddr && valueType.Kind() != reflect.Ptr && reflect.PtrTo(valueType).Implements(ienc.i) {
+			// if *t implements an interface, this will catch if t implements an interface further
+			// ahead in interfaceEncoders
+			defaultEnc, found := r.lookupInterfaceEncoder(valueType, false)
+			if !found {
+				defaultEnc, _ = r.kindEncoders.Load(valueType.Kind())
 			}
+			return newCondAddrEncoder(ienc.ve, defaultEnc), true
 		}
 	}
 	return nil, false
