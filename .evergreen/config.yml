@@ -32,6 +32,11 @@ functions:
       type: system
       params:
         directory: src/go.mongodb.org/mongo-driver
+    - command: shell.exec
+      params:
+        working_dir: "src/go.mongodb.org/mongo-driver"
+        script: |
+          git submodule update --init
     # Make an env.sh and evergreen expansion file with dynamic values
     - command: subprocess.exec
       params:
@@ -57,6 +62,7 @@ functions:
   handle-test-artifacts:
     - command: gotest.parse_files
       params:
+        optional_output: "true"
         files:
           - "src/go.mongodb.org/mongo-driver/*.suite"
     - command: ec2.assume_role
@@ -1420,16 +1426,15 @@ tasks:
         vars:
           MONGO_GO_DRIVER_COMPRESSOR: "snappy"
 
-  # Build the compilecheck submodule with the oldest supported version of Go.
-  - name: go1.18-build
+  # Build the compilecheck submodule with all supported versions of Go >= 
+  # the minimum supported version.
+  - name: go-build
     tags: ["compile-check"]
     commands:
       - command: subprocess.exec
         params:
           binary: bash
-          env:
-            GO_VERSION: "1.18"
-          args: [*task-runner, build-compile-check]
+          args: [*task-runner, build-compile-check-all]
 
   # Build with the same Go version that we're using for tests.
   - name: build
@@ -1477,6 +1482,23 @@ tasks:
       - func: run-versioned-api-test
         vars:
           TOPOLOGY: "server"
+          AUTH: "auth"
+          SSL: "nossl"
+          REQUIRE_API_VERSION: true
+
+  - name: "test-sharded-versioned-api"
+    tags: ["versioned-api"]
+    commands:
+      - func: bootstrap-mongo-orchestration
+        vars:
+          TOPOLOGY: "sharded_cluster"
+          AUTH: "auth"
+          SSL: "nossl"
+          REQUIRE_API_VERSION: true
+      - func: start-cse-servers
+      - func: run-versioned-api-test
+        vars:
+          TOPOLOGY: "sharded_cluster"
           AUTH: "auth"
           SSL: "nossl"
           REQUIRE_API_VERSION: true
@@ -1722,10 +1744,6 @@ axes:
         display_name: "4.0"
         variables:
           VERSION: "4.0"
-      - id: "3.6"
-        display_name: "3.6"
-        variables:
-          VERSION: "3.6"
       - id: "rapid"
         display_name: "rapid"
         variables:
@@ -1932,7 +1950,10 @@ task_groups:
   - name: testoidc_task_group
     setup_group_can_fail_task: true
     setup_group_timeout_secs: 1800
-    teardown_task_can_fail_task: true
+    # TODO(DRIVERS-3141): Uncomment the following line once the teardown bug is
+    # fixed. See DRIVERS-3141 for more context.
+    #
+    # teardown_task_can_fail_task: true
     teardown_group_timeout_secs: 180 # 3 minutes (max allowed time)
     setup_group:
       - func: setup-system
@@ -2122,7 +2143,7 @@ buildvariants:
     tags: ["pullrequest"]
     display_name: "Compile Only Checks"
     run_on:
-      - rhel8.7-small
+      - ubuntu2204-small
     expansions:
       GO_DIST: "/opt/golang/go1.23"
     tasks:
@@ -2176,19 +2197,6 @@ buildvariants:
       GO_DIST: "/opt/golang/go1.23"
     tasks:
       - name: ".goleak"
-
-  - matrix_name: "tests-rhel-36-with-zlib-support"
-    tags: ["pullrequest"]
-    matrix_spec: { version: ["3.6"], os-ssl-32: ["rhel87-64"] }
-    display_name: "${version} ${os-ssl-32}"
-    tasks:
-      - name: ".test !.enterprise-auth !.snappy !.zstd"
-
-  - matrix_name: "tests-windows-36-with-zlib-support"
-    matrix_spec: { version: ["3.6"], os-ssl-32: ["windows-64"] }
-    display_name: "${version} ${os-ssl-32}"
-    tasks:
-      - name: ".test !.enterprise-auth !.snappy !.zstd"
 
   - matrix_name: "tests-rhel-40-with-snappy-support"
     tags: ["pullrequest"]
