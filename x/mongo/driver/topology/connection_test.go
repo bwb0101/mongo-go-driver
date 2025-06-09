@@ -63,8 +63,8 @@ func TestConnection(t *testing.T) {
 		t.Run("connect", func(t *testing.T) {
 			t.Run("dialer error", func(t *testing.T) {
 				err := errors.New("dialer error")
-				var want error = ConnectionError{Wrapped: err, init: true}
-				conn := newConnection(address.Address(""), WithDialer(func(Dialer) Dialer {
+				var want error = ConnectionError{Wrapped: err, init: true, message: "failed to connect to testaddr:27017"}
+				conn := newConnection(address.Address("testaddr"), WithDialer(func(Dialer) Dialer {
 					return DialerFunc(func(context.Context, string, string) (net.Conn, error) { return nil, err })
 				}))
 				got := conn.connect(context.Background())
@@ -151,7 +151,7 @@ func TestConnection(t *testing.T) {
 					close(doneChan)
 
 					assert.Eventually(t,
-						func() bool { return done.Load().(bool) },
+						func() bool { return done.Load() != nil && done.Load().(bool) },
 						100*time.Millisecond,
 						1*time.Millisecond,
 						"TODO")
@@ -1101,84 +1101,63 @@ func (tcl *testCancellationListener) assertCalledOnce(t *testing.T) {
 	assert.Equal(t, 1, tcl.numStopListening, "expected StopListening to be called once, got %d", tcl.numListen)
 }
 
-func TestConnection_IsAlive(t *testing.T) {
+type testContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (tc *testContext) Deadline() (time.Time, bool) {
+	return tc.deadline, false
+}
+
+func TestConnectionError(t *testing.T) {
 	t.Parallel()
 
-	t.Run("uninitialized", func(t *testing.T) {
+	t.Run("EOF", func(t *testing.T) {
 		t.Parallel()
 
-		conn := newConnection("")
-		assert.False(t,
-			conn.isAlive(),
-			"expected isAlive for an uninitialized connection to always return false")
-	})
-
-	t.Run("connection open", func(t *testing.T) {
-		t.Parallel()
-
-		cleanup := make(chan struct{})
-		defer close(cleanup)
 		addr := bootstrapConnections(t, 1, func(nc net.Conn) {
-			// Keep the connection open until the end of the test.
-			<-cleanup
 			_ = nc.Close()
 		})
 
-		conn := newConnection(address.Address(addr.String()))
-		err := conn.connect(context.Background())
-		require.NoError(t, err)
+		p := newPool(
+			poolConfig{Address: address.Address(addr.String())},
+		)
+		defer p.close(context.Background())
+		err := p.ready()
+		require.NoError(t, err, "unexpected close error")
 
-		conn.idleStart.Store(time.Now().Add(-11 * time.Second))
-		assert.True(t,
-			conn.isAlive(),
-			"expected isAlive for an open connection to return true")
+		conn, err := p.checkOut(context.Background())
+		require.NoError(t, err, "unexpected checkOut error")
+
+		_, err = conn.readWireMessage(context.Background())
+		assert.ErrorContains(t, err, "connection closed unexpectedly by the other side: EOF")
 	})
-
-	t.Run("connection closed", func(t *testing.T) {
+	t.Run("timeout", func(t *testing.T) {
 		t.Parallel()
 
-		conns := make(chan net.Conn)
+		timeout := 10 * time.Millisecond
+
 		addr := bootstrapConnections(t, 1, func(nc net.Conn) {
-			conns <- nc
-		})
-
-		conn := newConnection(address.Address(addr.String()))
-		err := conn.connect(context.Background())
-		require.NoError(t, err)
-
-		// Close the connection before calling isAlive.
-		nc := <-conns
-		err = nc.Close()
-		require.NoError(t, err)
-
-		conn.idleStart.Store(time.Now().Add(-11 * time.Second))
-		assert.False(t,
-			conn.isAlive(),
-			"expected isAlive for a closed connection to return false")
-	})
-
-	t.Run("connection reads data", func(t *testing.T) {
-		t.Parallel()
-
-		cleanup := make(chan struct{})
-		defer close(cleanup)
-		addr := bootstrapConnections(t, 1, func(nc net.Conn) {
-			// Write some data to the connection before calling isAlive.
-			_, err := nc.Write([]byte{5, 0, 0, 0, 0})
-			require.NoError(t, err)
-
-			// Keep the connection open until the end of the test.
-			<-cleanup
+			time.Sleep(timeout * 2)
 			_ = nc.Close()
 		})
 
-		conn := newConnection(address.Address(addr.String()))
-		err := conn.connect(context.Background())
+		p := newPool(
+			poolConfig{Address: address.Address(addr.String())},
+		)
+		defer p.close(context.Background())
+		err := p.ready()
 		require.NoError(t, err)
 
-		conn.idleStart.Store(time.Now().Add(-11 * time.Second))
-		assert.False(t,
-			conn.isAlive(),
-			"expected isAlive for an open connection that reads data to return false")
+		conn, err := p.checkOut(context.Background())
+		require.NoError(t, err)
+
+		ctx := &testContext{
+			Context:  context.Background(),
+			deadline: time.Now().Add(timeout),
+		}
+		_, err = conn.readWireMessage(ctx)
+		assert.ErrorContains(t, err, "client timed out waiting for server response")
 	})
 }
